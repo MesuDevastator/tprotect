@@ -1,0 +1,15 @@
+[submodule "lib/imgui"]
+	path = lib/imgui
+	url = https://github.com/ocornut/imgui.git
+[submodule "lib/glfw"]
+	path = lib/glfw
+	url = https://github.com/glfw/glfw
+[submodule "lib/freetype"]
+	path = lib/freetype
+	url = https://github.com/freetype/freetype
+[submodule "lib/plutosvg"]
+	path = lib/plutosvg
+	url = https://github.com/sammycage/plutosvg
+[submodule "lib/ImGuiFileDialog"]
+	path = lib/ImGuiFileDialog
+	url = https://github.com/aiekick/ImGuiFileDialog
