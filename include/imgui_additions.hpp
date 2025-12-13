@@ -4,8 +4,6 @@
 
 #include <functional>
 
-#include <imgui_config.hpp>
-
 #include <imgui.h>
 #include <imgui_stdlib.h>
 

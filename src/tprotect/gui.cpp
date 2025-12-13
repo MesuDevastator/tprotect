@@ -1,5 +1,6 @@
 // gui.cpp: Dear ImGui User Interface Manager
 
+#include <fonts.hpp>
 #include <tprotect/file_dialog.hpp>
 #include <tprotect/gui.hpp>
 
@@ -102,6 +103,14 @@ bool gui::is_initialized() const noexcept
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     io.IniFilename = nullptr;
+
+    // Setup fonts
+    noto_sans_regular = io.Fonts->AddFontFromMemoryCompressedTTF(noto_sans_regular_compressed_data,
+                                                                 sizeof noto_sans_regular_compressed_data);
+    jetbrains_mono_regular = io.Fonts->AddFontFromMemoryCompressedTTF(jetbrains_mono_regular_compressed_data,
+                                                                      sizeof jetbrains_mono_regular_compressed_data);
+
+    // Setup style
     ImGui::StyleColorsDark();
 
     // Setup scaling
@@ -190,27 +199,27 @@ void gui::shutdown() noexcept
         const auto viewport{ImGui::GetMainViewport()};
         ImGui::SetNextWindowPos(viewport->Pos);
         ImGui::SetNextWindowSize(viewport->Size);
-        ImGui::Begin("TProtect", nullptr,
-                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
-
-        render_window();
-
-        // Display and process dialogs
-        std::string message{};
-        if (auto result{process_file()}; !result)
+        if (ImGui::Begin("TProtect", nullptr,
+                         ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                             ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus))
         {
-            ImGui::OpenPopup("Error Processing File");
-            message = std::move(result.error());
+            render_window();
+
+            // Display and process dialogs
+            std::string message{};
+            if (auto result{process_file()}; !result)
+            {
+                ImGui::OpenPopup("Error Processing File");
+                message = std::move(result.error());
+            }
+
+            ImGui::InformationPopup("Error Processing File", message.c_str(), [] {});
+
+            if (should_exit_)
+            {
+                return {};
+            }
         }
-
-        ImGui::InformationPopup("Error Processing File", message.c_str(), [] {});
-
-        if (should_exit_)
-        {
-            return {};
-        }
-
         ImGui::End();
 
         // Render the frame
@@ -229,13 +238,14 @@ void gui::shutdown() noexcept
 void gui::render_window() noexcept
 {
     // Top title with larger font
-    ImGui::SetWindowFontScale(2.0f);
+    ImGui::PushFont(noto_sans_regular, ImGui::GetFontSize() * 2.f);
     ImGui::TextCentered("TProtect");
+    ImGui::PopFont();
     if (ImGui::IsItemHovered())
     {
         ImGui::SetTooltip("The Text Protector");
     }
-    ImGui::SetWindowFontScale(1.0f); // Reset font scale
+
     ImGui::Separator();
 
     std::string cipher_message{};
@@ -350,7 +360,9 @@ void gui::render_window() noexcept
 
         // Cell (2,1): Encrypted text input
         ImGui::TableSetColumnIndex(0);
+        ImGui::PushFont(jetbrains_mono_regular, 0.f);
         ImGui::InputTextMultiline("##Decrypted", &decrypted_text_, ImVec2{-1, -1});
+        ImGui::PopFont();
 
         // Cell (2,2): Buttons and options
         ImGui::TableSetColumnIndex(1);
@@ -455,12 +467,14 @@ void gui::render_window() noexcept
 
         // Cell (2,3): Decrypted text input
         ImGui::TableSetColumnIndex(2);
+        ImGui::PushFont(jetbrains_mono_regular, 0.f);
         ImGui::InputTextMultiline("##Encrypted", &encrypted_text_, ImVec2{-1, -1});
+        ImGui::PopFont();
 
         ImGui::EndTable();
     }
 
-    ImGui::ShowDemoWindow();
+    // ImGui::PopFont();
 }
 
 [[nodiscard]] eresult<void> gui::process_file() noexcept

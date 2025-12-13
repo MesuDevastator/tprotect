@@ -11,6 +11,7 @@
 #include <tprotect/global.hpp>
 
 struct GLFWwindow;
+struct ImFont;
 
 namespace tprotect
 {
@@ -76,8 +77,8 @@ class gui final
     GLFWwindow *window_{};
 
     // UI state
-    double fps_idle_{9.};
-    bool is_idling_{};
+    ImFont *noto_sans_regular{};
+    ImFont *jetbrains_mono_regular{};
     enum class cipher
     {
         substitution,
@@ -89,7 +90,8 @@ class gui final
     tprotect::cipher::substitution_cipher substitution_cipher{initial_mapping};
     tprotect::cipher::transposition_cipher transposition_cipher{initial_key};
     int transposition_key{initial_key};
-
+    double fps_idle_{9.};
+    bool is_idling_{};
     std::atomic<bool> is_initialized_; // `std::atomic<bool>` for thread safety
     bool should_exit_{};
 };

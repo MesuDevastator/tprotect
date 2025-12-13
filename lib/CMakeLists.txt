@@ -18,6 +18,11 @@ target_include_directories(imgui PUBLIC
     imgui/misc/cpp
     imgui/misc/freetype
 )
+target_compile_definitions(imgui PUBLIC
+    IMGUI_DISABLE_DEFAULT_FONT
+    IMGUI_ENABLE_FREETYPE
+    IMGUI_ENABLE_FREETYPE_PLUTOSVG
+)
 add_dependencies(imgui freetype plutosvg glfw)
 target_link_libraries(imgui PUBLIC freetype plutosvg glfw)
 target_link_libraries(ImGuiFileDialog PUBLIC imgui)
