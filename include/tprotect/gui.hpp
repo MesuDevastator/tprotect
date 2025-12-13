@@ -10,7 +10,8 @@
 #include <tprotect/cipher/transposition_cipher.hpp>
 #include <tprotect/global.hpp>
 
-struct GLFWwindow;
+struct SDL_Window;
+struct SDL_Renderer;
 struct ImFont;
 
 namespace tprotect
@@ -74,10 +75,11 @@ class gui final
 
     std::mutex main_loop_mutex_;
     std::string title_; // save it to ensure its validity
-    GLFWwindow *window_{};
+    SDL_Window *window_{};
+    SDL_Renderer *renderer_{};
 
     // UI state
-    ImFont *noto_sans_regular{};
+    ImFont *futura_medium{};
     ImFont *jetbrains_mono_regular{};
     enum class cipher
     {
@@ -90,7 +92,7 @@ class gui final
     tprotect::cipher::substitution_cipher substitution_cipher{initial_mapping};
     tprotect::cipher::transposition_cipher transposition_cipher{initial_key};
     int transposition_key{initial_key};
-    double fps_idle_{9.};
+    double fps_idle_{10.};
     bool is_idling_{};
     std::atomic<bool> is_initialized_; // `std::atomic<bool>` for thread safety
     bool should_exit_{};

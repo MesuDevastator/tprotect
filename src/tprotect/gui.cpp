@@ -5,16 +5,14 @@
 #include <tprotect/gui.hpp>
 
 #include <filesystem>
-#include <print>
 #include <ranges>
 
 #include <imgui_additions.hpp>
 
-#include <imgui_impl_glfw.h>
-#include <imgui_impl_opengl3.h>
+#include <imgui_impl_sdl3.h>
+#include <imgui_impl_sdlrenderer3.h>
 
-#define GL_SILENCE_DEPRECATION
-#include <GLFW/glfw3.h> // includes system OpenGL headers
+#include <SDL3/SDL.h>
 
 #ifdef __EMSCRIPTEN__
 #include "../libs/emscripten/emscripten_mainloop_stub.h"
@@ -64,37 +62,32 @@ bool gui::is_initialized() const noexcept
     title_ = std::move(title);
 
     // Initialize GLFW
-    glfwSetErrorCallback([](const int error, const char *const description) {
-        std::println(stderr, "[GLFW] Error {}: {}", error, description);
-    });
-    if (!glfwInit())
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD))
     {
-        return std::unexpected{"Failed to initialize GLFW"};
+        return std::unexpected{std::format("Failed to initialize SDL: {}", SDL_GetError())};
     }
-#ifdef __APPLE__
-    // OpenGL 3.2 + GLSL 150
-    constexpr const char *glsl_version{"#version 150"};
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 2);
-    glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE); // 3.2+ only
-    glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GL_TRUE);           // Required on Mac
-#else
-    // OpenGL 3.0 + GLSL 130
-    constexpr const char *glsl_version{"#version 130"};
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
-    glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 0);
-#endif
 
     // Create window
-    const float main_scale{ImGui_ImplGlfw_GetContentScaleForMonitor(glfwGetPrimaryMonitor())};
-    window_ = glfwCreateWindow(static_cast<int>(width * main_scale), static_cast<int>(height * main_scale),
-                               title_.c_str(), nullptr, nullptr);
+    const float main_scale{SDL_GetDisplayContentScale(SDL_GetPrimaryDisplay())};
+    window_ =
+        SDL_CreateWindow(title_.c_str(), static_cast<int>(width * main_scale), static_cast<int>(height * main_scale),
+                         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (window_ == nullptr)
     {
-        return std::unexpected{"Failed to create GLFW window"};
+        return std::unexpected{std::format("Failed to create SDL window: {}", SDL_GetError())};
     }
-    glfwMakeContextCurrent(window_);
-    glfwSwapInterval(1); // enable vsync
+
+    // Create renderer
+    renderer_ = SDL_CreateRenderer(window_, nullptr);
+    if (renderer_ == nullptr)
+    {
+        return std::unexpected{std::format("Failed to create SDL renderer: {}", SDL_GetError())};
+    }
+    SDL_SetRenderVSync(renderer_, 1);
+
+    // Show window
+    SDL_SetWindowPosition(window_, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
+    SDL_ShowWindow(window_);
 
     // Setup Dear ImGui
     IMGUI_CHECKVERSION();
@@ -104,14 +97,8 @@ bool gui::is_initialized() const noexcept
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
     io.IniFilename = nullptr;
 
-    // Setup fonts
-    noto_sans_regular = io.Fonts->AddFontFromMemoryCompressedTTF(noto_sans_regular_compressed_data,
-                                                                 sizeof noto_sans_regular_compressed_data);
-    jetbrains_mono_regular = io.Fonts->AddFontFromMemoryCompressedTTF(jetbrains_mono_regular_compressed_data,
-                                                                      sizeof jetbrains_mono_regular_compressed_data);
-
     // Setup style
-    ImGui::StyleColorsDark();
+    ImGui::StyleColorsComfortableDark();
 
     // Setup scaling
     auto &style{ImGui::GetStyle()};
@@ -119,11 +106,19 @@ bool gui::is_initialized() const noexcept
     style.FontScaleDpi = main_scale;
 
     // Setup backends
-    ImGui_ImplGlfw_InitForOpenGL(window_, true);
-#ifdef __EMSCRIPTEN__
-    ImGui_ImplGlfw_InstallEmscriptenCallbacks(window, "#canvas");
-#endif
-    ImGui_ImplOpenGL3_Init(glsl_version);
+    ImGui_ImplSDL3_InitForSDLRenderer(window_, renderer_);
+    ImGui_ImplSDLRenderer3_Init(renderer_);
+
+    // Setup fonts
+    ImFontConfig font_cfg{};
+    font_cfg.MergeMode = true;
+    io.Fonts->AddFontFromMemoryCompressedTTF(futura_medium_compressed_data, sizeof futura_medium_compressed_data);
+    futura_medium = io.Fonts->AddFontFromMemoryCompressedTTF(
+        noto_sans_cjk_regular_compressed_data, sizeof noto_sans_cjk_regular_compressed_data, 0.f, &font_cfg);
+    io.Fonts->AddFontFromMemoryCompressedTTF(jetbrains_mono_regular_compressed_data,
+                                             sizeof jetbrains_mono_regular_compressed_data);
+    jetbrains_mono_regular = io.Fonts->AddFontFromMemoryCompressedTTF(
+        noto_sans_cjk_regular_compressed_data, sizeof noto_sans_cjk_regular_compressed_data, 0.f, &font_cfg);
 
     return {};
 }
@@ -138,17 +133,23 @@ void gui::shutdown() noexcept
 
     std::lock_guard<std::mutex> main_loop_guard_{main_loop_mutex_}; // prevent shutdown while the main loop is running
 
-    ImGui_ImplOpenGL3_Shutdown();
-    ImGui_ImplGlfw_Shutdown();
+    ImGui_ImplSDLRenderer3_Shutdown();
+    ImGui_ImplSDL3_Shutdown();
     ImGui::DestroyContext();
 
-    if (window_)
+    if (renderer_)
     {
-        glfwDestroyWindow(window_);
+        SDL_DestroyRenderer(renderer_);
         window_ = nullptr;
     }
 
-    glfwTerminate();
+    if (window_)
+    {
+        SDL_DestroyWindow(window_);
+        window_ = nullptr;
+    }
+
+    SDL_Quit();
 }
 
 [[nodiscard]] eresult<void> gui::main_loop() noexcept
@@ -161,7 +162,7 @@ void gui::shutdown() noexcept
 #ifdef __EMSCRIPTEN__
     EMSCRIPTEN_MAINLOOP_BEGIN
 #endif
-    while (!glfwWindowShouldClose(window_))
+    while (!should_exit_)
     {
 #ifdef __EMSCRIPTEN__
         if (ShallIdleThisFrame_Emscripten(is_idling_))
@@ -175,7 +176,7 @@ void gui::shutdown() noexcept
         {
             const auto before_wait{std::chrono::steady_clock::now()};
             const double wait_expected{1. / fps_idle_};
-            glfwWaitEventsTimeout(wait_expected);
+            SDL_WaitEventTimeout(nullptr, wait_expected * 1000);
             const auto after_wait{std::chrono::steady_clock::now()};
             const double wait_duration{duration_cast<std::chrono::duration<double>>(after_wait - before_wait).count()};
             is_idling_ = wait_duration > wait_expected * 0.5;
@@ -183,16 +184,30 @@ void gui::shutdown() noexcept
 #endif
 
         // Handle events
-        glfwPollEvents();
-        if (glfwGetWindowAttrib(window_, GLFW_ICONIFIED) != 0)
+        SDL_Event event{};
+        while (SDL_PollEvent(&event))
         {
-            ImGui_ImplGlfw_Sleep(10);
+            ImGui_ImplSDL3_ProcessEvent(&event);
+            if (event.type == SDL_EVENT_QUIT)
+            {
+                should_exit_ = true;
+            }
+            if (event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED && event.window.windowID == SDL_GetWindowID(window_))
+            {
+                should_exit_ = true;
+            }
+        }
+
+        // Halt minimized render
+        if (SDL_GetWindowFlags(window_) & SDL_WINDOW_MINIMIZED)
+        {
+            SDL_Delay(10);
             continue;
         }
 
         // Start a new frame
-        ImGui_ImplOpenGL3_NewFrame();
-        ImGui_ImplGlfw_NewFrame();
+        ImGui_ImplSDLRenderer3_NewFrame();
+        ImGui_ImplSDL3_NewFrame();
         ImGui::NewFrame();
 
         // Render the user draw list
@@ -214,20 +229,17 @@ void gui::shutdown() noexcept
             }
 
             ImGui::InformationPopup("Error Processing File", message.c_str(), [] {});
-
-            if (should_exit_)
-            {
-                return {};
-            }
         }
         ImGui::End();
 
         // Render the frame
         ImGui::Render();
-        glClearColor(0, 0, 0, 0);
-        glClear(GL_COLOR_BUFFER_BIT);
-        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-        glfwSwapBuffers(window_);
+        auto &io{ImGui::GetIO()};
+        SDL_SetRenderScale(renderer_, io.DisplayFramebufferScale.x, io.DisplayFramebufferScale.y);
+        SDL_SetRenderDrawColorFloat(renderer_, 0.f, 0.f, 0.f, 0.f);
+        SDL_RenderClear(renderer_);
+        ImGui_ImplSDLRenderer3_RenderDrawData(ImGui::GetDrawData(), renderer_);
+        SDL_RenderPresent(renderer_);
     }
 #ifdef __EMSCRIPTEN__
     EMSCRIPTEN_MAINLOOP_END;
@@ -238,7 +250,7 @@ void gui::shutdown() noexcept
 void gui::render_window() noexcept
 {
     // Top title with larger font
-    ImGui::PushFont(noto_sans_regular, ImGui::GetFontSize() * 2.f);
+    ImGui::PushFont(futura_medium, ImGui::GetFontSize() * 2.f);
     ImGui::TextCentered("TProtect");
     ImGui::PopFont();
     if (ImGui::IsItemHovered())
@@ -265,7 +277,7 @@ void gui::render_window() noexcept
         if (ImGui::BeginTable("DecryptedHeader", 3,
                               ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody))
         {
-            ImGui::TableSetupColumn("Text", ImGuiTableColumnFlags_WidthStretch, 0.0f);
+            ImGui::TableSetupColumn("Text", ImGuiTableColumnFlags_WidthFixed, 0.0f);
             ImGui::TableSetupColumn("Spacer", ImGuiTableColumnFlags_WidthStretch, 1.0f);
             ImGui::TableSetupColumn("Buttons", ImGuiTableColumnFlags_WidthFixed, 0.0f);
 
@@ -285,18 +297,18 @@ void gui::render_window() noexcept
 
             // Cell 3: Buttons (Right Aligned)
             ImGui::TableSetColumnIndex(2);
-            if (ImGui::Button("Clear"))
+            if (ImGui::ButtonPadded("Clear"))
             {
                 decrypted_text_.clear();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Load"))
+            if (ImGui::ButtonPadded("Load"))
             {
                 ImGuiFileDialog::Instance()->OpenDialog("##LoadDecrypted", "Choose Decrypted Text To Load", ".txt",
                                                         {.path = "."});
             }
             ImGui::SameLine();
-            if (ImGui::Button("Save"))
+            if (ImGui::ButtonPadded("Save"))
             {
                 ImGuiFileDialog::Instance()->OpenDialog("##SaveDecrypted", "Choose Decrypted Text To Save", ".txt",
                                                         {.path = "."});
@@ -315,7 +327,7 @@ void gui::render_window() noexcept
         if (ImGui::BeginTable("EncryptedHeader", 3,
                               ImGuiTableFlags_SizingStretchSame | ImGuiTableFlags_NoBordersInBody))
         {
-            ImGui::TableSetupColumn("Text", ImGuiTableColumnFlags_WidthStretch, 0.0f);
+            ImGui::TableSetupColumn("Text", ImGuiTableColumnFlags_WidthFixed, 0.0f);
             ImGui::TableSetupColumn("Spacer", ImGuiTableColumnFlags_WidthStretch, 1.0f);
             ImGui::TableSetupColumn("Buttons", ImGuiTableColumnFlags_WidthFixed, 0.0f);
 
@@ -335,18 +347,18 @@ void gui::render_window() noexcept
 
             // Cell 3: Buttons (Right Aligned)
             ImGui::TableSetColumnIndex(2);
-            if (ImGui::Button("Clear"))
+            if (ImGui::ButtonPadded("Clear"))
             {
                 encrypted_text_.clear();
             }
             ImGui::SameLine();
-            if (ImGui::Button("Load"))
+            if (ImGui::ButtonPadded("Load"))
             {
                 ImGuiFileDialog::Instance()->OpenDialog("##LoadEncrypted", "Choose Encrypted Text To Load", ".txt",
                                                         {.path = "."});
             }
             ImGui::SameLine();
-            if (ImGui::Button("Save"))
+            if (ImGui::ButtonPadded("Save"))
             {
                 ImGuiFileDialog::Instance()->OpenDialog("##SaveEncrypted", "Choose Encrypted Text To Save", ".txt",
                                                         {.path = "."});
@@ -460,8 +472,7 @@ void gui::render_window() noexcept
             ImGui::OpenPopup("Exit Confirmation");
         }
 
-        ImGui::ConfirmationPopup("Exit Confirmation", "Are you sure you want to exit?",
-                                 [this] { should_exit_ = true; });
+        ImGui::ConfirmationPopup("Exit Confirmation", "Are you sure to exit?", [this] { should_exit_ = true; });
 
         ImGui::PopItemWidth();
 
