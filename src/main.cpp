@@ -5,7 +5,7 @@
 
 #include <tprotect/gui.hpp>
 
-int main(const int argc, const char *const argv[])
+int main()
 {
     using namespace tprotect;
     return gui::create(800, 600, "TProtect") // create singleton

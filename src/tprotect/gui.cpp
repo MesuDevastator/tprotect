@@ -15,6 +15,10 @@
 #define GL_SILENCE_DEPRECATION
 #include <GLFW/glfw3.h> // includes system OpenGL headers
 
+#ifdef __EMSCRIPTEN__
+#include "../libs/emscripten/emscripten_mainloop_stub.h"
+#endif
+
 using namespace std::literals;
 
 namespace tprotect
@@ -33,7 +37,7 @@ gui &gui::instance() noexcept
     return instance;
 }
 
-[[nodiscard]] gui::result_type gui::create(const int width, const int height, std::string title) noexcept
+[[nodiscard]] eresult<void> gui::create(const int width, const int height, std::string title) noexcept
 {
     return instance().initialize(width, height, std::move(title));
 }
@@ -48,7 +52,7 @@ bool gui::is_initialized() const noexcept
     return is_initialized_.load(std::memory_order_acquire);
 }
 
-[[nodiscard]] gui::result_type gui::initialize(const int width, const int height, std::string title) noexcept
+[[nodiscard]] eresult<void> gui::initialize(const int width, const int height, std::string title) noexcept
 {
     if (bool expected{};
         !is_initialized_.compare_exchange_strong(expected, true, std::memory_order_release, std::memory_order_relaxed))
@@ -94,18 +98,22 @@ bool gui::is_initialized() const noexcept
     // Setup Dear ImGui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    ImGuiIO &io{ImGui::GetIO()};
+    auto &io{ImGui::GetIO()};
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+    io.IniFilename = nullptr;
     ImGui::StyleColorsDark();
 
     // Setup scaling
-    ImGuiStyle &style{ImGui::GetStyle()};
+    auto &style{ImGui::GetStyle()};
     style.ScaleAllSizes(main_scale);
     style.FontScaleDpi = main_scale;
 
     // Setup backends
     ImGui_ImplGlfw_InitForOpenGL(window_, true);
+#ifdef __EMSCRIPTEN__
+    ImGui_ImplGlfw_InstallEmscriptenCallbacks(window, "#canvas");
+#endif
     ImGui_ImplOpenGL3_Init(glsl_version);
 
     return {};
@@ -134,15 +142,37 @@ void gui::shutdown() noexcept
     glfwTerminate();
 }
 
-[[nodiscard]] gui::result_type gui::main_loop() noexcept
+[[nodiscard]] eresult<void> gui::main_loop() noexcept
 {
     if (!is_initialized() || !window_)
     {
         return std::unexpected{"GUI has not been initialized"};
     }
     std::lock_guard<std::mutex> main_loop_guard_{main_loop_mutex_}; // prevent shutdown while the main loop is running
+#ifdef __EMSCRIPTEN__
+    EMSCRIPTEN_MAINLOOP_BEGIN
+#endif
     while (!glfwWindowShouldClose(window_))
     {
+#ifdef __EMSCRIPTEN__
+        if (ShallIdleThisFrame_Emscripten(is_idling_))
+        {
+            continue;
+        }
+#else
+        // Render idling
+        is_idling_ = false;
+        if (fps_idle_ > 0.)
+        {
+            const auto before_wait{std::chrono::steady_clock::now()};
+            const double wait_expected{1. / fps_idle_};
+            glfwWaitEventsTimeout(wait_expected);
+            const auto after_wait{std::chrono::steady_clock::now()};
+            const double wait_duration{duration_cast<std::chrono::duration<double>>(after_wait - before_wait).count()};
+            is_idling_ = wait_duration > wait_expected * 0.5;
+        }
+#endif
+
         // Handle events
         glfwPollEvents();
         if (glfwGetWindowAttrib(window_, GLFW_ICONIFIED) != 0)
@@ -157,11 +187,18 @@ void gui::shutdown() noexcept
         ImGui::NewFrame();
 
         // Render the user draw list
-        render();
+        const auto viewport{ImGui::GetMainViewport()};
+        ImGui::SetNextWindowPos(viewport->Pos);
+        ImGui::SetNextWindowSize(viewport->Size);
+        ImGui::Begin("TProtect", nullptr,
+                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
+                         ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+        render_window();
 
         // Display and process dialogs
         std::string message{};
-        if (auto result{process()}; !result)
+        if (auto result{process_file()}; !result)
         {
             ImGui::OpenPopup("Error Processing File");
             message = std::move(result.error());
@@ -174,6 +211,8 @@ void gui::shutdown() noexcept
             return {};
         }
 
+        ImGui::End();
+
         // Render the frame
         ImGui::Render();
         glClearColor(0, 0, 0, 0);
@@ -181,18 +220,14 @@ void gui::shutdown() noexcept
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
         glfwSwapBuffers(window_);
     }
+#ifdef __EMSCRIPTEN__
+    EMSCRIPTEN_MAINLOOP_END;
+#endif
     return {};
 }
 
-void gui::render() noexcept
+void gui::render_window() noexcept
 {
-    const auto viewport{ImGui::GetMainViewport()};
-    ImGui::SetNextWindowPos(viewport->Pos);
-    ImGui::SetNextWindowSize(viewport->Size);
-    ImGui::Begin("TProtect", nullptr,
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove |
-                     ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoBringToFrontOnFocus);
-
     // Top title with larger font
     ImGui::SetWindowFontScale(2.0f);
     ImGui::TextCentered("TProtect");
@@ -326,11 +361,6 @@ void gui::render() noexcept
         ImGui::PushItemWidth(button_width);
 
         ImGui::Spacing();
-        ImGui::RadioButton("Auto", reinterpret_cast<int *>(&selected_cipher_), static_cast<int>(cipher::automatic));
-        if (ImGui::IsItemHovered())
-        {
-            ImGui::SetTooltip("Defaults to Substitution on encryption");
-        }
         ImGui::RadioButton("Substitution", reinterpret_cast<int *>(&selected_cipher_),
                            static_cast<int>(cipher::substitution));
         if (ImGui::IsItemHovered())
@@ -348,65 +378,47 @@ void gui::render() noexcept
         ImGui::Spacing();
         if (ImGui::Button("Encrypt", ImVec2{button_width, 0}))
         {
-            switch (selected_cipher_)
-            {
-            case cipher::automatic:
-            case cipher::substitution: {
-                if (auto result{substitution_cipher.encrypt(decrypted_text_)}; result)
+            [this]() -> eresult<std::string> {
+                switch (selected_cipher_)
                 {
-                    encrypted_text_ = std::move(result.value());
+                case cipher::substitution:
+                    return substitution_cipher.encrypt(decrypted_text_);
+                case cipher::transposition:
+                    return transposition_cipher.encrypt(decrypted_text_);
                 }
-                else
-                {
-                    ImGui::OpenPopup("Error Encrypting");
-                    cipher_message = std::move(result.error());
-                }
-                break;
-            }
-            case cipher::transposition: {
-                if (auto result{transposition_cipher.encrypt(decrypted_text_)}; result)
-                {
-                    encrypted_text_ = std::move(result.value());
-                }
-                else
-                {
-                    ImGui::OpenPopup("Error Encrypting");
-                    cipher_message = std::move(result.error());
-                }
-                break;
-            }
-            }
+            }()
+                            .and_then([this](const std::string value) -> eresult<void> {
+                                encrypted_text_ = std::move(value);
+                                return {};
+                            })
+                            .or_else([this, &cipher_message](const std::string error) -> eresult<void> {
+                                ImGui::OpenPopup("Error Encrypting");
+                                cipher_message = std::move(error);
+                                return std::unexpected{error};
+                            })
+                            .emplace();
         }
         if (ImGui::Button("Decrypt", ImVec2{button_width, 0}))
         {
-            switch (selected_cipher_)
-            {
-            case cipher::automatic:
-            case cipher::substitution: {
-                if (auto result{substitution_cipher.decrypt(encrypted_text_)}; result)
+            [this]() -> eresult<std::string> {
+                switch (selected_cipher_)
                 {
-                    decrypted_text_ = std::move(result.value());
+                case cipher::substitution:
+                    return substitution_cipher.decrypt(encrypted_text_);
+                case cipher::transposition:
+                    return transposition_cipher.decrypt(encrypted_text_);
                 }
-                else
-                {
-                    ImGui::OpenPopup("Error Decrypting");
-                    cipher_message = std::move(result.error());
-                }
-                break;
-            }
-            case cipher::transposition: {
-                if (auto result{transposition_cipher.decrypt(encrypted_text_)}; result)
-                {
-                    decrypted_text_ = std::move(result.value());
-                }
-                else
-                {
-                    ImGui::OpenPopup("Error Decrypting");
-                    cipher_message = std::move(result.error());
-                }
-                break;
-            }
-            }
+            }()
+                            .and_then([this](const std::string value) -> eresult<void> {
+                                decrypted_text_ = std::move(value);
+                                return {};
+                            })
+                            .or_else([this, &cipher_message](const std::string error) -> eresult<void> {
+                                ImGui::OpenPopup("Error Decrypting");
+                                cipher_message = std::move(error);
+                                return std::unexpected{error};
+                            })
+                            .emplace();
         }
 
         if (selected_cipher_ == cipher::transposition)
@@ -425,10 +437,12 @@ void gui::render() noexcept
         }
 
         ImGui::InformationPopup("Error Encrypting", cipher_message.c_str(), [] {});
+        ImGui::InformationPopup("Error Decrypting", cipher_message.c_str(), [] {});
 
         ImGui::Spacing();
         ImGui::Separator();
         ImGui::Spacing();
+
         if (ImGui::Button("Exit", ImVec2{button_width, 0}))
         {
             ImGui::OpenPopup("Exit Confirmation");
@@ -446,10 +460,10 @@ void gui::render() noexcept
         ImGui::EndTable();
     }
 
-    ImGui::End();
+    ImGui::ShowDemoWindow();
 }
 
-[[nodiscard]] gui::result_type gui::process() noexcept
+[[nodiscard]] eresult<void> gui::process_file() noexcept
 {
     return read_file_dialog("##LoadEncrypted", encrypted_text_)
         .and_then([this] { return read_file_dialog("##LoadDecrypted", decrypted_text_); })
@@ -457,17 +471,20 @@ void gui::render() noexcept
         .and_then([this] { return write_file_dialog("##SaveDecrypted", decrypted_text_); })
         .and_then([this] {
             return display_file_dialog("##SaveDecryptedBrute")
-                .and_then([this](const std::string &path) -> std::optional<std::expected<void, std::string>> {
-                    std::filesystem::path fs_path{path};
-                    std::ranges::for_each(std::views::iota(1, 26), [&](const int i) {
+                .transform([this](const std::string path) -> eresult<void> {
+                    std::ranges::for_each(std::views::iota(1, 27), [&](const int i) {
                         tprotect::cipher::transposition_cipher cipher{i};
-                        return cipher.decrypt(encrypted_text_).and_then([&](const std::string &decrypted_text) {
-                            return write_file(
-                                fs_path.replace_filename(std::format("{}_{}.txt", fs_path.filename().string(), i))
-                                    .string(),
-                                std::move(decrypted_text));
+                        std::filesystem::path fs_path{path}, fs_extention{fs_path.extension()};
+                        return cipher.decrypt(encrypted_text_).and_then([&](const std::string decrypted_text) {
+                            return write_file(fs_path.replace_extension()
+                                                  .replace_filename({std::format("{}_{}{}", fs_path.filename().string(),
+                                                                                 i, fs_extention.string())})
+                                                  .string(),
+                                              std::move(decrypted_text));
                         });
                     });
+                    ImGui::OpenPopup("Save Decrypt Brute");
+                    ImGui::InformationPopup("Save Decrypt Brute", "Successfully decrypted brute-forcely", [] {});
                     return {};
                 })
                 .value_or({});
