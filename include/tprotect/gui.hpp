@@ -6,6 +6,7 @@
 #include <mutex>
 #include <string>
 
+#include <tprotect/cipher/frequency_analyzer.hpp>
 #include <tprotect/cipher/substitution_cipher.hpp>
 #include <tprotect/cipher/transposition_cipher.hpp>
 #include <tprotect/global.hpp>
@@ -92,6 +93,7 @@ class gui final
     tprotect::cipher::substitution_cipher substitution_cipher{initial_mapping};
     tprotect::cipher::transposition_cipher transposition_cipher{initial_key};
     int transposition_key{initial_key};
+    bool show_frequency_analysis_{false};
     double fps_idle_{10.};
     bool is_idling_{};
     std::atomic<bool> is_initialized_; // `std::atomic<bool>` for thread safety

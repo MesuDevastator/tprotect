@@ -8,8 +8,8 @@
 int main()
 {
     using namespace tprotect;
-    return gui::create(900, 720, "TProtect") // create singleton
-        .and_then([] {                       // if succeeding, enter the main loop and destroy the singleton
+    return gui::create(1000, 720, "TProtect") // create singleton
+        .and_then([] {                        // if succeeding, enter the main loop and destroy the singleton
             const auto result{gui::instance().main_loop()};
             gui::destroy();
             return result;

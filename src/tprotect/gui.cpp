@@ -467,6 +467,19 @@ void gui::render_window() noexcept
         ImGui::Separator();
         ImGui::Spacing();
 
+        if (ImGui::Button(show_frequency_analysis_ ? "Hide Analysis" : "Show Analysis", ImVec2{button_width, 0}))
+        {
+            show_frequency_analysis_ = !show_frequency_analysis_;
+        }
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Toggle letter frequency analysis for cipher breaking");
+        }
+
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::Spacing();
+
         if (ImGui::Button("Exit", ImVec2{button_width, 0}))
         {
             ImGui::OpenPopup("Exit Confirmation");
@@ -483,6 +496,83 @@ void gui::render_window() noexcept
         ImGui::PopFont();
 
         ImGui::EndTable();
+    }
+
+    // Frequency Analysis Panel
+    if (show_frequency_analysis_)
+    {
+        ImGui::Separator();
+        ImGui::Spacing();
+
+        ImGui::TextCentered("Letter Frequency Analysis");
+        if (ImGui::IsItemHovered())
+        {
+            ImGui::SetTooltip("Analyze letter frequencies to help break substitution ciphers");
+        }
+
+        ImGui::Spacing();
+
+        // Analyze encrypted text
+        const auto frequencies{tprotect::cipher::frequency_analyzer::analyze(encrypted_text_)};
+
+        if (frequencies.empty())
+        {
+            ImGui::TextCentered("No letters found in encrypted text");
+        }
+        else
+        {
+            // Create two-column layout for frequency table
+            if (ImGui::BeginTable("FrequencyTable", 4,
+                                  ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_SizingStretchProp))
+            {
+                // Setup columns
+                ImGui::TableSetupColumn("Letter", ImGuiTableColumnFlags_WidthFixed, 60.0f);
+                ImGui::TableSetupColumn("Count", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableSetupColumn("Frequency", ImGuiTableColumnFlags_WidthStretch, 1.0f);
+                ImGui::TableSetupColumn("English", ImGuiTableColumnFlags_WidthFixed, 80.0f);
+                ImGui::TableHeadersRow();
+
+                // Get English frequencies for comparison
+                const auto english_freq{tprotect::cipher::frequency_analyzer::get_english_frequencies()};
+
+                // Display frequency data
+                for (const auto &freq : frequencies)
+                {
+                    ImGui::TableNextRow();
+
+                    // Letter column
+                    ImGui::TableSetColumnIndex(0);
+                    ImGui::TextCentered(std::string{freq.letter}.c_str());
+
+                    // Count column
+                    ImGui::TableSetColumnIndex(1);
+                    ImGui::Text("%d", freq.count);
+
+                    // Frequency bar column
+                    ImGui::TableSetColumnIndex(2);
+                    const float bar_fraction{freq.percentage / 100.0f};
+                    ImGui::ProgressBar(bar_fraction, ImVec2{-1, 0}, std::format("{:.2f}%", freq.percentage).c_str());
+
+                    // English frequency column (for comparison)
+                    ImGui::TableSetColumnIndex(3);
+                    if (freq.letter >= 'A' && freq.letter <= 'Z')
+                    {
+                        ImGui::Text("%.2f%%", english_freq[freq.letter - 'A']);
+                    }
+                    else if (freq.letter >= 'a' && freq.letter <= 'z')
+                    {
+                        ImGui::Text("%.2f%%", english_freq[freq.letter - 'a']);
+                    }
+                }
+
+                ImGui::EndTable();
+            }
+
+            ImGui::Spacing();
+            ImGui::TextWrapped(
+                "Tip: In English, the most common letters are E, T, A, O, I, N. Compare encrypted frequencies with "
+                "English frequencies to deduce the substitution mapping.");
+        }
     }
 
     // ImGui::PopFont();
